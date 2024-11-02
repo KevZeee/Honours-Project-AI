@@ -1,0 +1,182 @@
+clear; clc
+
+% ============================
+% Dependencies
+% ============================
+addpath('F:\Registration Code\spm-main\spm-main')  % get from https://github.com/spm/spm
+addpath('F:\Registration Code\spm-hospital-preproc-master\spm-hospital-preproc-master')  % get from https://github.com/WTCN-computational-anatomy-group/spm-hospital-preproc
+
+% ============================
+% Paths
+% ============================
+% Ensure to unzip the nifit files, SPM does not read *.nii.gz, only *.nii
+% Also, convert segmentation from .nrrd to .nii (see
+% https://discourse.slicer.org/t/convert-nrrd-to-nii-gz/16694)
+dir_data = 'F:\Registration Code\NewTestingData\Normals\CTA'  % Change to folder where images are stored
+
+DWI_files = dir(fullfile(dir_data, '*_DWI_b1000.nii'))
+NCCT_files = dir(fullfile(dir_data, '*_CTA.nii'))
+Segmentation_files = dir(fullfile(dir_data, '*_DWI.nii')) % Change to preferred naming convention
+
+%Check if the number of DWIs and NCCTs are equal in the directories
+if numel(DWI_files) ~= numel(NCCT_files)
+    error('Number of DWI and NCCT files do not match')
+end
+
+% Process for each DWI and NCCT image pair
+for i=1:numel(DWI_files)
+    % Paths to MRIs
+    paths_mr_1 = {fullfile(dir_data, DWI_files(i).name)};
+
+    % Paths to Segmentations
+    % Here it is assumed that the segementation was drawn on the first MR
+    % image in paths_mr_1 (*_DWI.nii)
+    paths_label_1 = {fullfile(dir_data, Segmentation_files(i).name)};
+
+    % Paths to NCCTs
+    paths_ct_1 = {fullfile(dir_data, NCCT_files(i).name)};
+    
+
+    % ============================
+    % Align MRIs
+    % ============================
+
+    % Set preprocessing options
+    opt = struct;    
+    opt.dir_out = dir_data;
+    opt.do.real_mni = true;
+    opt.do.coreg = true;
+
+    % Run preprocessing
+    RunPreproc({paths_mr_1, paths_label_1}, opt)
+
+    % ============================
+    % Align CTs
+    % ============================
+
+    % Set preprocessing options
+    opt = struct;    
+    opt.dir_out = dir_data;
+    opt.do.res_orig = true;
+    opt.do.real_mni = true;
+
+    % Run preprocessing
+    RunPreproc(paths_ct_1, opt);
+
+    % ============================
+    % Ensure to use preprocessed images
+    % ============================
+
+    prefix = 'pp_';
+    paths_mr_2 = cell(numel(paths_mr_1), 1);
+    for i=1:numel(paths_mr_1); paths_mr_2{i} = prepend_pth(paths_mr_1{i}, prefix); end
+    paths_ct_2 = cell(numel(paths_ct_1), 1);
+    for i=1:numel(paths_ct_2); paths_ct_2{i} = prepend_pth(paths_ct_1{i}, prefix); end
+    paths_label_2 = cell(numel(paths_label_1), 1);
+    for i=1:numel(paths_label_2); paths_label_2{i} = prepend_pth(paths_label_1{i}, prefix); end
+
+    % ============================
+    % Align first CT to b1000
+    % ============================
+
+    % Set preprocessing options
+    opt = struct;
+    opt.dir_out = dir_data;
+    opt.do.coreg = true;
+    opt.coreg.ref = 1;
+
+    % Run preprocessing
+    RunPreproc({paths_mr_2{1}, paths_ct_2{1}}, opt);
+
+    % ============================
+    % Align second CT to first CT
+    % ============================
+
+    % Set preprocessing options
+    opt = struct;
+    opt.dir_out = dir_data;
+    opt.do.coreg = true;
+    opt.coreg.ref = 1;
+
+    % Run preprocessing
+    RunPreproc(paths_ct_2, opt);
+
+    % Delete temp files
+    spm_unlink(paths_mr_2{1});
+    for i=1:numel(paths_ct_2); spm_unlink(paths_ct_2{i}); end
+
+    % ============================
+    % Ensure to use preprocessed images
+    % ============================
+
+    prefix = {'pp_', '', ''};
+    paths_mr_3 = cell(numel(paths_mr_2), 1);
+    for i=1:numel(paths_mr_3); paths_mr_3{i} = prepend_pth(paths_mr_2{i}, prefix{i}); end
+    prefix = 'pp_';
+    paths_ct_3 = cell(numel(paths_ct_2), 1);
+    for i=1:numel(paths_ct_3); paths_ct_3{i} = prepend_pth(paths_ct_2{i}, prefix); end
+
+    % ============================
+    % Resize
+    % ============================
+
+    % Set preprocessing options
+    opt = struct;
+    opt.dir_out = dir_data;
+    opt.do.bb_spm = true;
+    opt.do.vx = true;
+    opt.vx.size = 1;
+    opt.bb.dim = [192 192 192];
+
+    % Run preprocessing
+    RunPreproc({ ...
+        cat(1, paths_mr_3, paths_ct_3), ...
+        cat(1, paths_label_2, repmat({''}, numel(paths_ct_3), 1)) ...
+    }, opt);
+
+    prefix = 'pp_';
+    paths_mr_4 = cell(numel(paths_mr_3), 1);
+    for i=1:numel(paths_mr_4); paths_mr_4{i} = prepend_pth(paths_mr_3{i}, prefix); end
+    paths_ct_4 = cell(numel(paths_ct_3), 1);
+    for i=1:numel(paths_ct_4); paths_ct_4{i} = prepend_pth(paths_ct_3{i}, prefix); end
+    paths_label_4 = cell(numel(paths_label_2), 1);
+    for i=1:numel(paths_label_4); paths_label_4{i} = prepend_pth(paths_label_2{i}, prefix); end
+
+    % ============================
+    % Rename
+    % ============================
+
+    prefix = 'reg_';
+    for i=1:numel(paths_mr_3)
+        n_pth = prepend_pth(paths_mr_1{i}, prefix);
+       movefile(paths_mr_3{i}, n_pth);
+    end
+    for i=1:numel(paths_ct_3)
+        n_pth = prepend_pth(paths_ct_1{i}, prefix);
+        movefile(paths_ct_3{i}, n_pth);
+    end
+    n_pth = prepend_pth(paths_label_1{1}, prefix);
+    movefile(paths_label_2{1}, n_pth);
+
+    prefix = 'vx_reg_';
+    for i=1:numel(paths_mr_4)
+        n_pth = prepend_pth(paths_mr_1{i}, prefix);
+        movefile(paths_mr_4{i}, n_pth);
+    end
+    for i=1:numel(paths_ct_4)
+        n_pth = prepend_pth(paths_ct_1{i}, prefix);
+        movefile(paths_ct_4{i}, n_pth);
+    end
+    n_pth = prepend_pth(paths_label_1{1}, prefix);
+    movefile(paths_label_4{1}, n_pth);
+
+    % ============================
+
+end
+
+function pth = prepend_pth(pth, prefix)
+    if strcmp(pth, ''); return; end
+    [filepath, name, ext] = fileparts(pth);
+    name = [prefix, name];
+    pth = fullfile(filepath, [name, ext]);
+end
